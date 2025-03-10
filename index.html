@@ -1,0 +1,157 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Top Cause Analysis</title>
+    <link rel="icon" href="https://raw.githubusercontent.com/gramener/assets/main/straive-favicon.svg" />
+    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/css/bootstrap.min.css"
+        crossorigin="anonymous" />
+    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.11.3/font/bootstrap-icons.min.css" />
+    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/highlight.js@11.9.0/styles/github-dark.min.css"
+        crossorigin="anonymous">
+    <script src="https://cdn.jsdelivr.net/pyodide/v0.23.4/full/pyodide.js"></script>
+    <style>
+        .narrative {
+            max-inline-size: 40rem;
+        }
+
+        .hljs {
+            padding: 0.5rem;
+        }
+
+        #tablePreview {
+            overflow-x: auto;
+            margin-bottom: 1.5rem;
+        }
+
+        .hidden {
+            display: none;
+        }
+
+        .container {
+            max-width: 1200px;
+        }
+
+        pre {
+            white-space: pre-wrap;
+            word-wrap: break-word;
+        }
+    </style>
+</head>
+
+<body>
+    <nav class="navbar navbar-expand-lg bg-body-tertiary" data-bs-theme="dark">
+        <div class="container-fluid">
+            <a class="navbar-brand" href=".">Top Cause Analysis</a>
+            <button class="navbar-toggler" type="button" data-bs-toggle="collapse"
+                data-bs-target="#navbarSupportedContent" aria-controls="navbarSupportedContent" aria-expanded="false"
+                aria-label="Toggle navigation">
+                <span class="navbar-toggler-icon"></span>
+            </button>
+            <div class="collapse navbar-collapse" id="navbarSupportedContent">
+                <div class="nav-item dropdown ms-auto" role="group" aria-label="Toggle dark mode"
+                    title="Toggle Dark Mode">
+                    <button class="dark-theme-toggle btn btn-outline-light dropdown-toggle" type="button"
+                        data-bs-toggle="dropdown" aria-expanded="false" aria-label="Toggle theme (auto)">
+                        <i class="bi bi-circle-half"></i> <span class="d-lg-none ms-2">Toggle theme</span>
+                    </button>
+                    <ul class="dropdown-menu dropdown-menu-end">
+                        <li><button class="dropdown-item" data-bs-theme-value="light"><i
+                                    class="me-2 bi bi-sun-fill"></i> Light</button></li>
+                        <li><button class="dropdown-item" data-bs-theme-value="dark"><i
+                                    class="me-2 bi bi-moon-stars-fill"></i> Dark</button></li>
+                        <li><button class="dropdown-item" data-bs-theme-value="auto"><i
+                                    class="me-2 bi bi-circle-half"></i> Auto</button></li>
+                    </ul>
+                </div>
+            </div>
+        </div>
+    </nav>
+
+    <div class="container my-5">
+        <h1 class="mb-4">TopCause Browser</h1>
+        
+        <div class="card mb-4">
+            <div class="card-header">
+                <h5 class="mb-0">Upload CSV File</h5>
+            </div>
+            <div class="card-body">
+                <div class="mb-3">
+                    <label for="fileInput" class="form-label">Select CSV File</label>
+                    <input type="file" class="form-control" id="fileInput" accept=".csv">
+                </div>
+                <!-- <button id="previewButton" class="btn btn-primary">Preview Data</button> -->
+            </div>
+        </div>
+
+        <div id="previewSection" class="card mb-4 hidden">
+            <div class="card-header">
+                <h5 class="mb-0">Data Preview</h5>
+            </div>
+            <div class="card-body">
+                <div id="tablePreview" class="table-responsive"></div>
+            </div>
+        </div>
+
+        <div id="derivedMetricsSection" class="card mb-4 hidden">
+            <div class="card-header">
+                <h5 class="mb-0">Get AI-Suggested Derived Metrics</h5>
+            </div>
+            <div class="card-body">
+                <p class="mb-3">Click the button below to get AI-suggested derived metrics based on your dataset. You'll need to be logged in to LLM Foundry.</p>
+                <div class="mb-3">
+                    <label for="featureCount" class="form-label">Number of features to suggest</label>
+                    <input id="featureCount" class="form-control" type="number" min="1" max="20" value="10">
+                    <small class="form-text text-muted">Enter a number between 1-20 and click the button below</small>
+                </div>
+
+                <!-- Add this container for column selection -->
+                <div id="columnSelectionContainer" class="mb-4 hidden">
+                    <!-- Column selection UI will be rendered here -->
+                </div>
+
+                <button id="getDerivedMetricsButton" class="btn btn-primary">Get Derived Metrics Suggestions</button>
+                
+                <div id="derivedMetricsContainer" class="mt-4"></div>
+            </div>
+        </div>
+
+        <div class="card mb-4">
+            <div class="card-header">
+                <h5 class="mb-0">Run TopCause Analysis</h5>
+            </div>
+            <div class="card-body">
+                <div class="mb-3">
+                    <label for="targetColumn" class="form-label">Select Target Column</label>
+                    <select class="form-select" id="targetColumn"></select>
+                </div>
+                <button id="analysisButton" class="btn btn-primary">Run Analysis</button>
+            </div>
+        </div>
+
+        <div id="resultSection" class="card mb-4 hidden">
+            <div class="card-header">
+                <h5 class="mb-0">Analysis Results</h5>
+            </div>
+            <div class="card-body">
+                <div id="output"></div>
+            </div>
+        </div>
+    </div>
+
+    <footer class="my-5 vh-100 d-flex align-items-center justify-content-center">
+        <h1 class="display-4">
+            Designed by
+            <a href="https://gramener.com/"
+                class="text-reset link-offset-3 link-underline link-underline-opacity-25">Gramener</a>
+        </h1>
+    </footer>
+
+    <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/js/bootstrap.bundle.min.js" type="module"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@gramex/ui@0.3/dist/dark-theme.js" type="module"></script>
+    <script src="script.js" type="module"></script>
+</body>
+
+</html>
