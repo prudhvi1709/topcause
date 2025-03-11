@@ -75,7 +75,7 @@
         
         <div class="card mb-4">
             <div class="card-header">
-                <h5 class="mb-0">Step 1: Upload CSV File</h5>
+                <h5 class="mb-0">Upload CSV File</h5>
             </div>
             <div class="card-body">
                 <div class="mb-3">
@@ -97,7 +97,7 @@
 
         <div id="derivedMetricsSection" class="card mb-4 hidden">
             <div class="card-header">
-                <h5 class="mb-0">Step 2: Get AI-Suggested Derived Metrics</h5>
+                <h5 class="mb-0">Get AI-Suggested Derived Metrics</h5>
             </div>
             <div class="card-body">
                 <p class="mb-3">Click the button below to get AI-suggested derived metrics based on your dataset. You'll need to be logged in to LLM Foundry.</p>
@@ -106,6 +106,12 @@
                     <input id="featureCount" class="form-control" type="number" min="1" max="20" value="10">
                     <small class="form-text text-muted">Enter a number between 1-20 and click the button below</small>
                 </div>
+
+                <!-- Add this container for column selection -->
+                <div id="columnSelectionContainer" class="mb-4 hidden">
+                    <!-- Column selection UI will be rendered here -->
+                </div>
+
                 <button id="getDerivedMetricsButton" class="btn btn-primary">Get Derived Metrics Suggestions</button>
                 
                 <div id="derivedMetricsContainer" class="mt-4"></div>
@@ -114,7 +120,7 @@
 
         <div class="card mb-4">
             <div class="card-header">
-                <h5 class="mb-0">Step 3: Run TopCause Analysis</h5>
+                <h5 class="mb-0">Run TopCause Analysis</h5>
             </div>
             <div class="card-body">
                 <div class="mb-3">
