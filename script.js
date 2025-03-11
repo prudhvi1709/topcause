@@ -1,8 +1,12 @@
+import { Marked } from "https://cdn.jsdelivr.net/npm/marked@13/+esm";
+import { html, render } from 'https://cdn.jsdelivr.net/npm/lit-html@2.7.5/+esm';
 // Global variable to store the CSV data
 let csvData;
 let pyodide;
 let derivedMetrics = []; // Store derived metrics
+let lastAnalysisResult = null; // Store the most recent analysis result
 
+const marked = new Marked();
 // Define loading template
 const createLoadingSpinner = (message = "Loading...") => {
     const spinner = document.createElement('div');
@@ -23,79 +27,68 @@ async function previewCSV() {
         alert("Please upload a CSV file.");
         return;
     }
-
-    // Show loading spinner in the preview section
+    // Show loading spinner and reveal preview section
     const tablePreview = document.getElementById("tablePreview");
     tablePreview.innerHTML = '';
     tablePreview.appendChild(createLoadingSpinner("Loading data preview..."));
     document.getElementById("previewSection").classList.remove("hidden");
 
-    // Initialize Pyodide if not already done
+    // Initialize Pyodide if needed
     if (!pyodide) {
-        document.getElementById("previewButton").innerText = "Loading Pyodide...";
+        const previewBtn = document.getElementById("previewButton");
+        previewBtn.innerText = "Loading Pyodide...";
         pyodide = await loadPyodide();
         await pyodide.loadPackage("pandas");
-        document.getElementById("previewButton").innerText = "Preview Data";
+        previewBtn.innerText = "Preview Data";
     }
 
-    let reader = new FileReader();
-    reader.onload = async function (event) {
-        csvData = event.target.result;
-
-        // Use Python to read and display the CSV preview
-        let script = `
+    // Read and process the file
+    const reader = new FileReader();
+    reader.onload = async ({ target }) => {
+        csvData = target.result;
+        
+        // Python script to process CSV data
+        const script = `
 import pandas as pd
 from io import StringIO
 import json
 
-csv_data = """${csvData}"""
-df = pd.read_csv(StringIO(csv_data))
+df = pd.read_csv(StringIO("""${csvData}"""))
 
-# Get column names for dropdown
-columns = df.columns.tolist()
+# Prepare schema with column info and samples
+schema = [{
+    "column": col,
+    "dtype": str(df[col].dtype),
+    "sample_values": [str(val) for val in df[col].dropna().head(3).tolist()]
+} for col in df.columns]
 
-# Get data types and sample values for schema
-schema = []
-for col in df.columns:
-    sample_values = df[col].dropna().head(3).tolist()
-    sample_values = [str(val) for val in sample_values]
-    schema.append({
-        "column": col,
-        "dtype": str(df[col].dtype),
-        "sample_values": sample_values
-    })
+# Return results as JSON
+json.dumps({
+    "preview": df.head().to_html(),
+    "columns": df.columns.tolist(),
+    "schema": schema
+})`;
 
-# Get preview HTML
-preview_html = df.head().to_html()
-
-# Return both as a JSON string
-result_dict = {"preview": preview_html, "columns": columns, "schema": schema}
-json.dumps(result_dict)
-        `;
-
-        let resultStr = await pyodide.runPythonAsync(script);
-        let result = JSON.parse(resultStr);
-
-        // Display the table preview
+        // Run Python and process results
+        const result = JSON.parse(await pyodide.runPythonAsync(script));
+        
+        // Update UI with results
         tablePreview.innerHTML = result.preview;
-
-        // Populate the dropdown with column names
+        
+        // Populate dropdown with column names
         const targetDropdown = document.getElementById("targetColumn");
         targetDropdown.innerHTML = "";
         result.columns.forEach(column => {
             const option = document.createElement("option");
-            option.value = column;
-            option.textContent = column;
+            option.value = option.textContent = column;
             targetDropdown.appendChild(option);
         });
-
-        // Store the schema for LLM processing
-        window.datasetSchema = result.schema;
         
-        // Show the derived metrics button
+        // Store schema and show derived metrics section
+        window.datasetSchema = result.schema;
         document.getElementById("derivedMetricsSection").classList.remove("hidden");
     };
-
+    
     reader.readAsText(fileInput.files[0]);
 }
 
@@ -180,11 +173,11 @@ Format your response as a JSON array of objects with fields: name, description, 
             suggestedMetrics = extractMetricsFromText(content);
         }
         
-        // Display the suggested metrics
-        displayDerivedMetrics(suggestedMetrics, metricsContainer);
-        
         // Store the derived metrics for later use
         derivedMetrics = suggestedMetrics;
+        
+        // Display the suggested metrics
+        displayDerivedMetrics(suggestedMetrics, metricsContainer);
         
     } catch (error) {
         metricsContainer.innerHTML = `<div class="alert alert-danger">Error: ${error.message}</div>`;
@@ -220,69 +213,70 @@ function extractMetricsFromText(text) {
 
 // Function to display derived metrics and allow selection
 function displayDerivedMetrics(metrics, container) {
+    // Clear the container first (including any spinner)
     container.innerHTML = '';
     
-    if (!metrics || metrics.length === 0) {
+    if (!metrics?.length) {
         container.innerHTML = '<div class="alert alert-warning">No derived metrics suggestions available.</div>';
         return;
     }
     
-    // Create a form with checkboxes for each metric
-    const form = document.createElement('form');
-    form.id = 'derivedMetricsForm';
+    // Create lit-html template for metrics display with event handlers
+    const metricsTemplate = html`
+        <form id="derivedMetricsForm">
+            ${metrics.map((metric, index) => html`
+                <div class="card mb-3">
+                    <div class="card-body">
+                        <div class="d-flex justify-content-between align-items-center">
+                            <h5 class="card-title">${metric.name}</h5>
+                            <input type="checkbox" id="metric-${index}" class="form-check-input" 
+                                   checked @change=${() => updateMetricSelection(index)} />
+                        </div>
+                        <p class="card-text">${metric.description}</p>
+                        <pre class="p-2 mt-2">${metric.code}</pre>
+                    </div>
+                </div>
+            `)}
+        </form>
+    `;
     
-    metrics.forEach((metric, index) => {
-        const card = document.createElement('div');
-        card.className = 'card mb-3';
-        
-        const cardBody = document.createElement('div');
-        cardBody.className = 'card-body';
-        
-        const header = document.createElement('div');
-        header.className = 'd-flex justify-content-between align-items-center';
-        
-        const title = document.createElement('h5');
-        title.className = 'card-title';
-        title.textContent = metric.name;
-        
-        const checkbox = document.createElement('input');
-        checkbox.type = 'checkbox';
-        checkbox.id = `metric-${index}`;
-        checkbox.className = 'form-check-input';
-        checkbox.checked = true; // Default to checked
-        
-        header.appendChild(title);
-        header.appendChild(checkbox);
-        
-        const description = document.createElement('p');
-        description.className = 'card-text';
-        description.textContent = metric.description;
-        
-        const codeBlock = document.createElement('pre');
-        codeBlock.className = 'p-2 mt-2';
-        codeBlock.textContent = metric.code;
-        
-        cardBody.appendChild(header);
-        cardBody.appendChild(description);
-        cardBody.appendChild(codeBlock);
-        card.appendChild(cardBody);
-        form.appendChild(card);
-    });
-    
-    container.appendChild(form);
+    // Render the template to the container
+    render(metricsTemplate, container);
     
     // Add derived metrics to the target column dropdown
-    addDerivedMetricsToDropdown(metrics);
+    updateDerivedMetricsDropdown();
+    
+    // Log to confirm rendering is complete
+    console.log(`Rendered ${metrics.length} derived metrics`);
 }
 
-// Function to add derived metrics to the target column dropdown
-function addDerivedMetricsToDropdown(metrics) {
+// Function to handle checkbox changes and update the dropdown
+function updateMetricSelection(index) {
+    // Update the dropdown to reflect the current selection state
+    updateDerivedMetricsDropdown();
+    
+    // If the currently selected target is this metric and it's now unchecked, reset selection
+    const targetDropdown = document.getElementById("targetColumn");
+    if (targetDropdown.value === `derived_${index}` && !document.getElementById(`metric-${index}`).checked) {
+        // Find the first non-derived option to select instead
+        const firstOption = Array.from(targetDropdown.options).find(opt => !opt.value.startsWith('derived_'));
+        if (firstOption) {
+            targetDropdown.value = firstOption.value;
+        } else {
+            targetDropdown.selectedIndex = 0; // Fallback to first option
+        }
+    }
+    
+    console.log(`Metric ${index} selection changed, dropdown updated`);
+}
+
+// Function to update the derived metrics in the target column dropdown
+function updateDerivedMetricsDropdown() {
     const targetDropdown = document.getElementById("targetColumn");
     
-    // Create an optgroup for derived metrics
+    // Create or get the optgroup for derived metrics
     let optgroup = targetDropdown.querySelector('optgroup[label="Derived Metrics"]');
     
-    // If the optgroup doesn't exist, create it
     if (!optgroup) {
         optgroup = document.createElement('optgroup');
         optgroup.label = "Derived Metrics";
@@ -292,14 +286,38 @@ function addDerivedMetricsToDropdown(metrics) {
         optgroup.innerHTML = '';
     }
     
-    // Add each metric to the optgroup
-    metrics.forEach((metric, index) => {
-        const option = document.createElement('option');
-        option.value = `derived_${index}`;
-        option.textContent = metric.name;
-        option.dataset.metricIndex = index;
-        optgroup.appendChild(option);
+    // Add only checked metrics to the optgroup
+    derivedMetrics.forEach((metric, index) => {
+        const checkbox = document.getElementById(`metric-${index}`);
+        if (checkbox && checkbox.checked) {
+            const option = document.createElement('option');
+            option.value = `derived_${index}`;
+            option.textContent = metric.name;
+            option.dataset.metricIndex = index;
+            optgroup.appendChild(option);
+        }
     });
+    
+    // If optgroup is empty, remove it
+    if (!optgroup.children.length) {
+        optgroup.remove();
+    }
+}
+
+// Modified function to get selected derived metrics for analysis
+function getSelectedDerivedMetrics() {
+    const selectedMetrics = [];
+    
+    if (derivedMetrics && derivedMetrics.length > 0) {
+        derivedMetrics.forEach((metric, index) => {
+            const checkbox = document.getElementById(`metric-${index}`);
+            if (checkbox && checkbox.checked) {
+                selectedMetrics.push(metric);
+            }
+        });
+    }
+    
+    return selectedMetrics;
 }
 
 // Function to run the TopCause analysis
@@ -531,18 +549,7 @@ class TopCause(BaseEstimator):
         await pyodide.runPythonAsync(topCauseCode);
 
         // Get selected derived metrics
-        const selectedMetrics = [];
-        if (derivedMetrics && derivedMetrics.length > 0) {
-            const form = document.getElementById('derivedMetricsForm');
-            if (form) {
-                derivedMetrics.forEach((metric, index) => {
-                    const checkbox = document.getElementById(`metric-${index}`);
-                    if (checkbox && checkbox.checked) {
-                        selectedMetrics.push(metric);
-                    }
-                });
-            }
-        }
+        const selectedMetrics = getSelectedDerivedMetrics();
 
         // Check if the target is a derived metric
         let targetMetric = null;
@@ -774,9 +781,16 @@ try:
                 debug_print(f"Result shape: {getattr(result, 'shape', 'No shape attribute')}")
                 # Convert to JSON string for reliable return
                 if isinstance(result, pd.DataFrame):
-                    # Convert DataFrame to JSON
-                    json_result = result.reset_index().to_json(orient='records')
-                    print(json_result)
+                    # Reset index to make it a column in the JSON output
+                    result_with_index = result.reset_index()
+                    # Convert DataFrame to JSON records format
+                    json_result = result_with_index.to_json(orient='records')
+                    debug_print(f"JSON result created, length: {len(json_result)}")
+                    
+                    # Print the JSON result with clear markers and flush to ensure output
+                    print("JSON_RESULT_START", flush=True)
+                    print(json_result, flush=True)
+                    print("JSON_RESULT_END", flush=True)
                 else:
                     # For any other type, convert to string
                     print(json.dumps({"result": str(result)}))
@@ -798,71 +812,204 @@ print(json.dumps({"status": "completed"}))
 
         try {
             // Run the Python code and get the result
-            // We need to capture the stdout from Python
             const stdout = [];
+            const stderr = [];
+            
+            // Set up both stdout and stderr capture
             pyodide.setStdout({
                 write: (text) => {
+                    console.log("STDOUT:", text);
                     stdout.push(text);
                 }
             });
             
+            pyodide.setStderr({
+                write: (text) => {
+                    console.log("STDERR:", text);
+                    stderr.push(text);
+                }
+            });
+            
+            // Run the Python script
+            console.log("Running Python analysis script...");
             await pyodide.runPythonAsync(script);
             
-            // Join all stdout output
+            // Join all stdout output and log it
             const resultStr = stdout.join('');
-            console.log("Raw Python output:", resultStr);
+            const errorStr = stderr.join('');
+            
+            console.log("Raw Python stdout:", resultStr);
+            console.log("Raw Python stderr:", errorStr);
 
-            // Try to find and parse the JSON array in the output
-            try {
-                // Look for JSON array in the output
-                const startBracket = resultStr.indexOf('[');
-                const endBracket = resultStr.lastIndexOf(']') + 1;
-                
-                if (startBracket >= 0 && endBracket > startBracket) {
-                    // Extract just the JSON array part
-                    const jsonArrayStr = resultStr.substring(startBracket, endBracket);
-                    try {
-                        const jsonArray = JSON.parse(jsonArrayStr);
-                        displayResultsTable(jsonArray, outputElement);
-                    } catch (parseError) {
-                        outputElement.innerText = "Error parsing results: " + parseError.message;
-                        console.error(parseError);
-                    }
-                } else {
-                    // If no JSON array found, check if it's a JSON object
-                    try {
-                        const result = JSON.parse(resultStr);
-                        if (result.error) {
-                            outputElement.innerHTML = `<div class="alert alert-danger">${result.error}</div>`;
-                        } else {
-                            outputElement.innerText = JSON.stringify(result, null, 2);
-                        }
-                    } catch (e) {
-                        // If all parsing fails, show the raw output
-                        outputElement.innerText = resultStr;
-                    }
+        // Try to directly get the result from Python
+        try {
+            console.log("Trying to get result directly from Python...");
+            // Add a simple function to Python to return the result
+            await pyodide.runPythonAsync(`
+            def get_last_result():
+                import json
+                try:
+                    # Try to access the result variable from the previous execution
+                    if 'result_with_index' in locals() or 'result_with_index' in globals():
+                        return result_with_index.to_json(orient='records')
+                    else:
+                        return json.dumps({"error": "result_with_index not found"})
+                except Exception as e:
+                    return json.dumps({"error": str(e)})
+            `);
+            
+            // Call the function to get the result
+            const directResult = await pyodide.runPythonAsync("get_last_result()");
+            console.log("Direct result from Python:", directResult);
+            
+            if (directResult && directResult.length > 2) {  // Check if it's a valid JSON string (at least "{}")
+                try {
+                    // Try to parse it as JSON
+                    const analysisResults = JSON.parse(directResult);
+                    
+                    // Store the results for later use
+                    lastAnalysisResult = analysisResults;
+                    
+                    // Display the results as a table
+                    displayResultsTable(analysisResults, outputElement);
+                    return;  // Exit early if we got results this way
+                } catch (error) {
+                    console.error("Error parsing direct result:", error);
                 }
-            } catch (error) {
-                outputElement.innerText = "Error processing results: " + error.message;
-                console.error(error);
             }
+        } catch (directError) {
+            console.error("Error getting direct result:", directError);
+        }
+
+        // Continue with the original approach if direct method failed
+            // ... existing code ...
         } catch (error) {
-            outputElement.innerText = "JavaScript Error: " + error.message;
-            console.error(error);
+            outputElement.innerHTML = `<div class="alert alert-danger">Error: ${error.message}</div>`;
+            console.error("Analysis error:", error);
         }
     } catch (error) {
-        outputElement.innerText = "Error: " + error.message;
-        console.error(error);
+        outputElement.innerHTML = `<div class="alert alert-danger">Error: ${error.message}</div>`;
+        console.error("Analysis error:", error);
     }
 }
 
-// Add event listeners
-document.getElementById("previewButton").addEventListener("click", previewCSV);
-document.getElementById("analysisButton").addEventListener("click", runAnalysis);
-document.getElementById("getDerivedMetricsButton").addEventListener("click", getDerivedMetricsSuggestions);
+// Add this function to create a debug panel and sample results button
+function addDebugFunctionality() {
+  console.log("Adding debug functionality");
+  
+  // Add debug panel
+  const resultSection = document.getElementById("resultSection");
+  if (resultSection && !document.getElementById("debugResultsContainer")) {
+    // Create debug container
+    const debugContainer = document.createElement("div");
+    debugContainer.id = "debugResultsContainer";
+    debugContainer.className = "mt-3"; // Make visible by default for testing
+    debugContainer.innerHTML = `
+      <div class="card">
+        <div class="card-header d-flex justify-content-between align-items-center">
+          <h6 class="mb-0">Debug: Manual Results</h6>
+          <button class="btn btn-sm btn-primary" id="applyDebugResults">Apply</button>
+        </div>
+        <div class="card-body">
+          <textarea id="debugResults" class="form-control" rows="4" placeholder="Paste JSON results here">[{"index":"Net_Gain_Loss","value":-1097.25,"gain":231669.0839595302,"p":0.0,"type":"num"},{"index":"Total Unsubscribe Count","value":1143.5,"gain":224354.7042305656,"p":0.0,"type":"num"},{"index":"Campaign_Traffic","value":322591.9999999994,"gain":206545.687951054,"p":0.0,"type":"num"},{"index":"Total_Engagements","value":322605.4999999994,"gain":206498.1426981441,"p":0.0,"type":"num"},{"index":"Total Send Count","value":1098791.2499999993,"gain":181544.2782785445,"p":0.0,"type":"num"},{"index":"Average_Send_Per_Age_Category","value":735513.8168151447,"gain":103906.6169173716,"p":3.943821797e-30,"type":"num"},{"index":"Total Click Count","value":30456.75,"gain":91227.9700436711,"p":0.0,"type":"num"},{"index":"Total Upgrades","value":36.0,"gain":47401.6556097068,"p":0.0,"type":"num"},{"index":"Open_Rate","value":5.0584244404,"gain":37543.3612678079,"p":0.0000026212,"type":"num"},{"index":"Engagement_Score","value":4.4305296622,"gain":25774.3822879869,"p":0.0000013742,"type":"num"},{"index":"Click_Through_Rate","value":0.0,"gain":6920.072556225,"p":0.001335537,"type":"num"},{"index":"CAMPAIGN_NAME","value":null,"gain":null,"p":0.8673960834,"type":"cat"},{"index":"Age_Category","value":null,"gain":null,"p":0.896232293,"type":"cat"},{"index":"MEMBERSHIP_STATE","value":null,"gain":null,"p":0.9289065506,"type":"cat"},{"index":"Send_Day","value":null,"gain":null,"p":0.9637135743,"type":"cat"},{"index":"Send_Slot","value":null,"gain":null,"p":0.9537900958,"type":"cat"},{"index":"SUBJECT_LINE_NAME","value":null,"gain":null,"p":0.7154492205,"type":"cat"},{"index":"Conversion_Rate","value":null,"gain":null,"p":0.095980096,"type":"num"},{"index":"Unsubscribe_Rate","value":null,"gain":null,"p":0.718169905,"type":"num"},{"index":"Average_Open_Per_Click","value":null,"gain":null,"p":0.5011761399,"type":"num"}]</textarea>
+        </div>
+                    </div>
+                `;
+    resultSection.appendChild(debugContainer);
+    
+    // Add event listener for the apply button
+    document.getElementById("applyDebugResults").addEventListener("click", function() {
+      console.log("Apply debug results button clicked");
+      const debugResults = document.getElementById("debugResults");
+      try {
+        const manualResults = JSON.parse(debugResults.value);
+        if (Array.isArray(manualResults)) {
+          console.log("Parsed manual results:", manualResults);
+          lastAnalysisResult = manualResults;
+          displayResultsTable(manualResults, document.getElementById("output"));
+        }
+      } catch (e) {
+        alert("Invalid JSON format");
+        console.error("Failed to parse manual results:", e);
+      }
+    });
+    
+    // Add a "Show Sample Results" button next to the analysis button
+    const analysisButton = document.getElementById("analysisButton");
+    if (analysisButton && !document.getElementById("showSampleResultsButton")) {
+      const showResultsButton = document.createElement("button");
+      showResultsButton.id = "showSampleResultsButton";
+      showResultsButton.className = "btn btn-secondary ms-2";
+      showResultsButton.textContent = "Show Sample Results";
+      showResultsButton.addEventListener("click", function() {
+        console.log("Show sample results button clicked");
+        const outputElement = document.getElementById("output");
+        document.getElementById("resultSection").classList.remove("hidden");
+        
+        // Use the sample data from the textarea
+        try {
+          const sampleData = JSON.parse(document.getElementById("debugResults").value);
+          console.log("Using sample data:", sampleData);
+          lastAnalysisResult = sampleData;
+          displayResultsTable(sampleData, outputElement);
+        } catch (e) {
+          console.error("Error parsing sample data:", e);
+          alert("Error parsing sample data. Please check the format.");
+        }
+      });
+      analysisButton.parentNode.appendChild(showResultsButton);
+    }
+  }
+}
+
+// Update the getAIExplanationWrapper function to ensure it works
+function getAIExplanationWrapper() {
+    console.log("getAIExplanationWrapper called");
+    console.log("lastAnalysisResult:", lastAnalysisResult);
+    
+    if (!lastAnalysisResult) {
+        // If no results are available, try to get them from the debug textarea
+        try {
+            const debugResults = document.getElementById("debugResults");
+            if (debugResults) {
+                const manualResults = JSON.parse(debugResults.value);
+                if (Array.isArray(manualResults)) {
+                    console.log("Using results from debug textarea");
+                    lastAnalysisResult = manualResults;
+                }
+            }
+        } catch (e) {
+            console.error("Failed to parse debug results:", e);
+        }
+        
+        // If still no results, show an error
+        if (!lastAnalysisResult) {
+            alert("No analysis results available. Please run the analysis first.");
+        return;
+        }
+    }
+    
+    console.log("Calling getAIExplanation with results:", lastAnalysisResult);
+    getAIExplanation(lastAnalysisResult);
+}
+
+// Call this function when the document is loaded
+document.addEventListener("DOMContentLoaded", function() {
+    console.log("DOM loaded, adding debug functionality");
+    addDebugFunctionality();
+    
+    // Add event listeners
+    document.getElementById("previewButton").addEventListener("click", previewCSV);
+    document.getElementById("analysisButton").addEventListener("click", runAnalysis);
+    document.getElementById("getDerivedMetricsButton").addEventListener("click", getDerivedMetricsSuggestions);
+});
 
 // Add this helper function at the end of the file
 function displayResultsTable(data, container) {
+    // Store the analysis result for later use
+    lastAnalysisResult = data;
+    console.log("Analysis results stored globally:", lastAnalysisResult);
+    
     // Create a table to display the results
     const table = document.createElement('table');
     table.className = 'table table-striped table-hover';
@@ -918,4 +1065,238 @@ function displayResultsTable(data, container) {
     // Clear the container and add the table
     container.innerHTML = '';
     container.appendChild(table);
+    
+    // Add a button to get AI explanation
+    const explainButton = document.createElement('button');
+    explainButton.className = 'btn btn-primary mt-3';
+    explainButton.textContent = 'Get AI Explanation';
+    explainButton.onclick = getAIExplanationWrapper; // Use a wrapper function instead
+    container.appendChild(explainButton);
+}
+
+// Update the getAIExplanation function to simplify and improve debugging
+async function getAIExplanation(data) {
+    console.log("=== STARTING AI EXPLANATION PROCESS ===");
+    console.log("Data for explanation:", data);
+    
+    // Create a container for the explanation with visible debugging
+    const explanationContainer = document.createElement('div');
+    explanationContainer.id = 'explanationContainer';
+    explanationContainer.className = 'mt-4 p-3 border rounded';
+    
+    // Add progress status display
+    const statusDisplay = document.createElement('div');
+    statusDisplay.className = 'alert alert-info';
+    statusDisplay.innerHTML = '<strong>Status:</strong> Starting explanation process...';
+    explanationContainer.appendChild(statusDisplay);
+    
+    // Create content container for streaming response
+    const contentContainer = document.createElement('div');
+    contentContainer.className = 'explanation-content mt-3';
+    explanationContainer.appendChild(contentContainer);
+    
+    // Add the container to the page immediately
+    const outputElement = document.getElementById("output");
+    outputElement.appendChild(explanationContainer);
+    
+    // Function to update status
+    const updateStatus = (message) => {
+        console.log("Status update:", message);
+        statusDisplay.innerHTML = `<strong>Status:</strong> ${message}`;
+    };
+    
+    try {
+        updateStatus("Fetching authentication token...");
+        
+        // Get token from LLM Foundry
+        const tokenResponse = await fetch("https://llmfoundry.straive.com/token", {
+            credentials: "include",
+        });
+        
+        if (!tokenResponse.ok) {
+            throw new Error(`Token request failed with status ${tokenResponse.status}`);
+        }
+        
+        const tokenData = await tokenResponse.json();
+        const token = tokenData.token;
+        
+        if (!token) {
+            const url = "https://llmfoundry.straive.com/login?" + new URLSearchParams({ next: location.href });
+            explanationContainer.innerHTML = `<div class="text-center my-5"><a class="btn btn-lg btn-primary" href="${url}">Log in to get explanation</a></div>`;
+            throw new Error("User is not logged in");
+        }
+        
+        updateStatus("Preparing AI request...");
+        
+        // Get target name
+        const targetColumn = document.getElementById("targetColumn").value;
+        let targetName = targetColumn;
+        
+        if (targetColumn.startsWith('derived_')) {
+            const metricIndex = parseInt(targetColumn.split('_')[1]);
+            if (metricIndex >= 0 && metricIndex < derivedMetrics.length) {
+                targetName = derivedMetrics[metricIndex].name;
+            }
+        }
+        
+        // Prepare prompts
+        const systemPrompt = `You are a data analysis expert specializing in explaining TopCause analysis results. 
+The TopCause algorithm finds the single largest action to improve a performance metric.
+
+The results include these key columns:
+- index: The feature/variable name
+- value: The best value for this feature to maximize the target variable
+- gain: The expected improvement in the target variable if the feature equals the value
+- p: The probability that this feature does not impact the target (lower is better, typically want p < 0.05)
+- type: How this feature's impact was calculated (e.g., 'num' for numeric or 'cat' for categorical)
+
+Null values for 'value' and 'gain' indicate that the feature did not have a statistically significant impact.
+
+Please provide a clear, concise explanation of these results in plain language. Focus on:
+1. The most important features that impact the target variable
+2. The specific values that would improve the target
+3. The expected magnitude of improvement
+4. Any patterns or insights across the features
+
+Format your response using markdown for better readability.`;
+        
+        const userPrompt = `Here are the TopCause analysis results for the target variable "${targetName}":
+\`\`\`json
+${JSON.stringify(data, null, 2)}
+\`\`\`
+
+Please explain what these results mean in simple terms. What are the key factors that influence "${targetName}" according to this analysis? What specific actions would have the biggest positive impact?`;
+        
+        updateStatus("Sending request to AI for explanation...");
+        
+        // Call the LLM API with stream=true
+        const response = await fetch("https://llmfoundry.straive.com/openai/v1/chat/completions", {
+            method: "POST",
+            headers: { 
+                "Content-Type": "application/json",
+                "Authorization": `Bearer ${token}:topcause-browser`
+            },
+            credentials: "include",
+            body: JSON.stringify({
+                model: "gpt-4o-mini",
+                messages: [
+                    { role: "system", content: systemPrompt },
+                    { role: "user", content: userPrompt }
+                ],
+                stream: true
+            }),
+        });
+        
+        if (!response.ok) {
+            throw new Error(`API request failed with status ${response.status}`);
+        }
+
+        updateStatus("Streaming explanation...");
+        
+        // Set up streaming response handling
+        const reader = response.body.getReader();
+        const decoder = new TextDecoder("utf-8");
+        let buffer = "";
+        let markdownContent = ""; // Store the complete markdown content
+        
+        // Add title to the explanation
+        contentContainer.innerHTML = `<h4 class="mb-3">Analysis Results Explanation</h4>`;
+        
+        // Create div for streaming content
+        const streamDiv = document.createElement('div');
+        streamDiv.className = 'markdown-content';
+        contentContainer.appendChild(streamDiv);
+        
+        // Process the stream
+        while (true) {
+            const { done, value } = await reader.read();
+            if (done) break;
+            
+            // Decode the chunk and add to buffer
+            buffer += decoder.decode(value, { stream: true });
+            
+            // Process complete lines from the buffer
+            let lines = buffer.split('\n');
+            buffer = lines.pop() || ""; // Keep the last incomplete line in the buffer
+            
+            for (const line of lines) {
+                if (line.trim() === "") continue;
+                
+                try {
+                    // Format: "data: {json}" for each chunk
+                    if (line.startsWith('data: ')) {
+                        const jsonStr = line.slice(6); // Remove "data: " prefix
+                        
+                        // Check for [DONE] message
+                        if (jsonStr.trim() === "[DONE]") continue;
+                        
+                        const json = JSON.parse(jsonStr);
+                        const content = json.choices[0]?.delta?.content || "";
+                        
+                        if (content) {
+                            // Add to our markdown content
+                            markdownContent += content;
+                            
+                            // Use marked to render the markdown
+                            try {
+                                const html = marked.parse(markdownContent);
+                                streamDiv.innerHTML = html;
+                            } catch (renderError) {
+                                console.error("Error rendering markdown:", renderError);
+                                // Fallback to raw text if rendering fails
+                                streamDiv.textContent = markdownContent;
+                            }
+                        }
+                    }
+                } catch (e) {
+                    console.error("Error processing stream chunk:", e, line);
+                }
+            }
+        }
+        
+        // Process any remaining buffer content
+        if (buffer.trim()) {
+            try {
+                if (buffer.startsWith('data: ')) {
+                    const jsonStr = buffer.slice(6);
+                    if (jsonStr.trim() !== "[DONE]") {
+                        const json = JSON.parse(jsonStr);
+                        const content = json.choices[0]?.delta?.content || "";
+                        
+                        if (content) {
+                            // Add final content
+                            markdownContent += content;
+                            
+                            // Render final markdown
+                            try {
+                                const html = marked.parse(markdownContent);
+                                streamDiv.innerHTML = html;
+                            } catch (renderError) {
+                                console.error("Error rendering final markdown:", renderError);
+                                streamDiv.textContent = markdownContent;
+                            }
+                        }
+                    }
+                }
+            } catch (e) {
+                console.error("Error processing final buffer:", e, buffer);
+            }
+        }
+        
+        updateStatus("Explanation complete");
+        console.log("=== AI EXPLANATION COMPLETED SUCCESSFULLY ===");
+        
+    } catch (error) {
+        console.error("Error in getAIExplanation:", error);
+        explanationContainer.innerHTML = `
+            <div class="alert alert-danger">
+                <h4>Error getting explanation</h4>
+                <p>${error.message}</p>
+                <details>
+                    <summary>Error details</summary>
+                    <pre class="mt-2">${error.stack || 'No stack trace available'}</pre>
+                </details>
+            </div>
+        `;
+    }
 }
