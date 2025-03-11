@@ -1,10 +1,9 @@
 import { Marked } from "https://cdn.jsdelivr.net/npm/marked@13/+esm";
 import { html, render } from 'https://cdn.jsdelivr.net/npm/lit-html@2.7.5/+esm';
-// Global variable to store the CSV data
 let csvData;
 let pyodide;
-let derivedMetrics = []; // Store derived metrics
-let lastAnalysisResult = null; // Store the most recent analysis result
+let derivedMetrics = [];
+let lastAnalysisResult = null;
 
 const marked = new Marked();
 // Define loading template
@@ -27,27 +26,28 @@ async function previewCSV() {
         alert("Please upload a CSV file.");
         return;
     }
-    // Show loading spinner and reveal preview section
+        
     const tablePreview = document.getElementById("tablePreview");
     tablePreview.innerHTML = '';
     tablePreview.appendChild(createLoadingSpinner("Loading data preview..."));
     document.getElementById("previewSection").classList.remove("hidden");
 
-    // Initialize Pyodide if needed
     if (!pyodide) {
-        const previewBtn = document.getElementById("previewButton");
-        previewBtn.innerText = "Loading Pyodide...";
-        pyodide = await loadPyodide();
-        await pyodide.loadPackage("pandas");
-        previewBtn.innerText = "Preview Data";
+        tablePreview.innerHTML = '';
+        tablePreview.appendChild(createLoadingSpinner("Loading Pyodide (this may take a moment)..."));
+        
+        try {
+            pyodide = await loadPyodide();
+            await pyodide.loadPackage("pandas");
+        } catch (error) {
+            tablePreview.innerHTML = `<div class="alert alert-danger">Error loading Pyodide: ${error.message}</div>`;
+            console.error("Failed to load Pyodide:", error);
+            return;
+        }
     }
-
-    // Read and process the file
     const reader = new FileReader();
     reader.onload = async ({ target }) => {
         csvData = target.result;
-        
-        // Python script to process CSV data
         const script = `
 import pandas as pd
 from io import StringIO
@@ -68,14 +68,8 @@ json.dumps({
     "columns": df.columns.tolist(),
     "schema": schema
 })`;
-
-        // Run Python and process results
         const result = JSON.parse(await pyodide.runPythonAsync(script));
-        
-        // Update UI with results
         tablePreview.innerHTML = result.preview;
-        
-        // Populate dropdown with column names
         const targetDropdown = document.getElementById("targetColumn");
         targetDropdown.innerHTML = "";
         result.columns.forEach(column => {
@@ -83,10 +77,9 @@ json.dumps({
             option.value = option.textContent = column;
             targetDropdown.appendChild(option);
         });
-        
-        // Store schema and show derived metrics section
         window.datasetSchema = result.schema;
         document.getElementById("derivedMetricsSection").classList.remove("hidden");
+        console.log("Derived metrics section should now be visible");
     };
     
     reader.readAsText(fileInput.files[0]);
@@ -99,13 +92,22 @@ async function getDerivedMetricsSuggestions() {
         return;
     }
 
+    // Get the requested number of features from the input field
+    const featureCountInput = document.getElementById("featureCount");
+    const featureCountValue = featureCountInput.value;
+    // Parse the input value, with fallback to 10 if invalid
+    let featureCount = parseInt(featureCountValue);
+    if (isNaN(featureCount) || featureCount < 1) {
+        featureCount = 10;
+        featureCountInput.value = "10"; // Reset the input to a valid value
+    }
+
     // Show loading spinner
     const metricsContainer = document.getElementById("derivedMetricsContainer");
     metricsContainer.innerHTML = '';
     metricsContainer.appendChild(createLoadingSpinner("Getting suggestions from AI..."));
     
     try {
-        // Get token from LLM Foundry
         const { token } = await fetch("https://llmfoundry.straive.com/token", {
             credentials: "include",
         }).then((res) => res.json());
@@ -122,7 +124,7 @@ async function getDerivedMetricsSuggestions() {
         const userPrompt = `Here is the schema of my dataset:
 ${JSON.stringify(window.datasetSchema, null, 2)}
 
-Please suggest 5-10 derived metrics or features that might be useful for analysis. For each suggestion, provide:
+Please suggest ${featureCount} derived metrics or features that might be useful for analysis. For each suggestion, provide:
 1. A short name for the metric
 2. A brief description of what it represents and why it's useful
 3. The exact Python pandas code to calculate it
@@ -893,18 +895,20 @@ print(json.dumps({"status": "completed"}))
     }
 }
 
-// Add this function to create a debug panel and sample results button
+// Add this function to create a debug panel (without the sample results button)
 function addDebugFunctionality() {
   console.log("Adding debug functionality");
   
-  // Add debug panel
+  // Add debug panel (hidden)
   const resultSection = document.getElementById("resultSection");
   if (resultSection && !document.getElementById("debugResultsContainer")) {
-    // Create debug container
+    // Create debug container - hidden by default
     const debugContainer = document.createElement("div");
     debugContainer.id = "debugResultsContainer";
-    debugContainer.className = "mt-3"; // Make visible by default for testing
-    debugContainer.innerHTML = `
+    debugContainer.className = "mt-3 d-none"; // Hidden by default
+    
+    // Use lit-html to render the debug panel
+    const debugTemplate = html`
       <div class="card">
         <div class="card-header d-flex justify-content-between align-items-center">
           <h6 class="mb-0">Debug: Manual Results</h6>
@@ -913,8 +917,11 @@ function addDebugFunctionality() {
         <div class="card-body">
           <textarea id="debugResults" class="form-control" rows="4" placeholder="Paste JSON results here">[{"index":"Net_Gain_Loss","value":-1097.25,"gain":231669.0839595302,"p":0.0,"type":"num"},{"index":"Total Unsubscribe Count","value":1143.5,"gain":224354.7042305656,"p":0.0,"type":"num"},{"index":"Campaign_Traffic","value":322591.9999999994,"gain":206545.687951054,"p":0.0,"type":"num"},{"index":"Total_Engagements","value":322605.4999999994,"gain":206498.1426981441,"p":0.0,"type":"num"},{"index":"Total Send Count","value":1098791.2499999993,"gain":181544.2782785445,"p":0.0,"type":"num"},{"index":"Average_Send_Per_Age_Category","value":735513.8168151447,"gain":103906.6169173716,"p":3.943821797e-30,"type":"num"},{"index":"Total Click Count","value":30456.75,"gain":91227.9700436711,"p":0.0,"type":"num"},{"index":"Total Upgrades","value":36.0,"gain":47401.6556097068,"p":0.0,"type":"num"},{"index":"Open_Rate","value":5.0584244404,"gain":37543.3612678079,"p":0.0000026212,"type":"num"},{"index":"Engagement_Score","value":4.4305296622,"gain":25774.3822879869,"p":0.0000013742,"type":"num"},{"index":"Click_Through_Rate","value":0.0,"gain":6920.072556225,"p":0.001335537,"type":"num"},{"index":"CAMPAIGN_NAME","value":null,"gain":null,"p":0.8673960834,"type":"cat"},{"index":"Age_Category","value":null,"gain":null,"p":0.896232293,"type":"cat"},{"index":"MEMBERSHIP_STATE","value":null,"gain":null,"p":0.9289065506,"type":"cat"},{"index":"Send_Day","value":null,"gain":null,"p":0.9637135743,"type":"cat"},{"index":"Send_Slot","value":null,"gain":null,"p":0.9537900958,"type":"cat"},{"index":"SUBJECT_LINE_NAME","value":null,"gain":null,"p":0.7154492205,"type":"cat"},{"index":"Conversion_Rate","value":null,"gain":null,"p":0.095980096,"type":"num"},{"index":"Unsubscribe_Rate","value":null,"gain":null,"p":0.718169905,"type":"num"},{"index":"Average_Open_Per_Click","value":null,"gain":null,"p":0.5011761399,"type":"num"}]</textarea>
         </div>
-                    </div>
-                `;
+      </div>
+    `;
+    
+    // Render the template to the container
+    render(debugTemplate, debugContainer);
     resultSection.appendChild(debugContainer);
     
     // Add event listener for the apply button
@@ -933,32 +940,6 @@ function addDebugFunctionality() {
         console.error("Failed to parse manual results:", e);
       }
     });
-    
-    // Add a "Show Sample Results" button next to the analysis button
-    const analysisButton = document.getElementById("analysisButton");
-    if (analysisButton && !document.getElementById("showSampleResultsButton")) {
-      const showResultsButton = document.createElement("button");
-      showResultsButton.id = "showSampleResultsButton";
-      showResultsButton.className = "btn btn-secondary ms-2";
-      showResultsButton.textContent = "Show Sample Results";
-      showResultsButton.addEventListener("click", function() {
-        console.log("Show sample results button clicked");
-        const outputElement = document.getElementById("output");
-        document.getElementById("resultSection").classList.remove("hidden");
-        
-        // Use the sample data from the textarea
-        try {
-          const sampleData = JSON.parse(document.getElementById("debugResults").value);
-          console.log("Using sample data:", sampleData);
-          lastAnalysisResult = sampleData;
-          displayResultsTable(sampleData, outputElement);
-        } catch (e) {
-          console.error("Error parsing sample data:", e);
-          alert("Error parsing sample data. Please check the format.");
-        }
-      });
-      analysisButton.parentNode.appendChild(showResultsButton);
-    }
   }
 }
 
@@ -999,9 +980,10 @@ document.addEventListener("DOMContentLoaded", function() {
     addDebugFunctionality();
     
     // Add event listeners
-    document.getElementById("previewButton").addEventListener("click", previewCSV);
+    // document.getElementById("previewButton").addEventListener("click", previewCSV);
     document.getElementById("analysisButton").addEventListener("click", runAnalysis);
     document.getElementById("getDerivedMetricsButton").addEventListener("click", getDerivedMetricsSuggestions);
+    document.getElementById("fileInput").addEventListener("change", previewCSV);
 });
 
 // Add this helper function at the end of the file
@@ -1079,16 +1061,13 @@ async function getAIExplanation(data) {
     console.log("=== STARTING AI EXPLANATION PROCESS ===");
     console.log("Data for explanation:", data);
     
-    // Create a container for the explanation with visible debugging
+    // Create a container for the explanation
     const explanationContainer = document.createElement('div');
     explanationContainer.id = 'explanationContainer';
     explanationContainer.className = 'mt-4 p-3 border rounded';
     
-    // Add progress status display
-    const statusDisplay = document.createElement('div');
-    statusDisplay.className = 'alert alert-info';
-    statusDisplay.innerHTML = '<strong>Status:</strong> Starting explanation process...';
-    explanationContainer.appendChild(statusDisplay);
+    // Add loading spinner
+    explanationContainer.appendChild(createLoadingSpinner("Getting AI explanation..."));
     
     // Create content container for streaming response
     const contentContainer = document.createElement('div');
@@ -1099,15 +1078,7 @@ async function getAIExplanation(data) {
     const outputElement = document.getElementById("output");
     outputElement.appendChild(explanationContainer);
     
-    // Function to update status
-    const updateStatus = (message) => {
-        console.log("Status update:", message);
-        statusDisplay.innerHTML = `<strong>Status:</strong> ${message}`;
-    };
-    
     try {
-        updateStatus("Fetching authentication token...");
-        
         // Get token from LLM Foundry
         const tokenResponse = await fetch("https://llmfoundry.straive.com/token", {
             credentials: "include",
@@ -1125,8 +1096,6 @@ async function getAIExplanation(data) {
             explanationContainer.innerHTML = `<div class="text-center my-5"><a class="btn btn-lg btn-primary" href="${url}">Log in to get explanation</a></div>`;
             throw new Error("User is not logged in");
         }
-        
-        updateStatus("Preparing AI request...");
         
         // Get target name
         const targetColumn = document.getElementById("targetColumn").value;
@@ -1167,8 +1136,6 @@ ${JSON.stringify(data, null, 2)}
 
 Please explain what these results mean in simple terms. What are the key factors that influence "${targetName}" according to this analysis? What specific actions would have the biggest positive impact?`;
         
-        updateStatus("Sending request to AI for explanation...");
-        
         // Call the LLM API with stream=true
         const response = await fetch("https://llmfoundry.straive.com/openai/v1/chat/completions", {
             method: "POST",
@@ -1191,21 +1158,19 @@ Please explain what these results mean in simple terms. What are the key factors
             throw new Error(`API request failed with status ${response.status}`);
         }
 
-        updateStatus("Streaming explanation...");
-        
         // Set up streaming response handling
         const reader = response.body.getReader();
         const decoder = new TextDecoder("utf-8");
         let buffer = "";
         let markdownContent = ""; // Store the complete markdown content
         
-        // Add title to the explanation
-        contentContainer.innerHTML = `<h4 class="mb-3">Analysis Results Explanation</h4>`;
+        // Add title and clear the loading spinner
+        explanationContainer.innerHTML = `<h4 class="mb-3">Analysis Results Explanation</h4>`;
         
         // Create div for streaming content
         const streamDiv = document.createElement('div');
         streamDiv.className = 'markdown-content';
-        contentContainer.appendChild(streamDiv);
+        explanationContainer.appendChild(streamDiv);
         
         // Process the stream
         while (true) {
@@ -1283,7 +1248,6 @@ Please explain what these results mean in simple terms. What are the key factors
             }
         }
         
-        updateStatus("Explanation complete");
         console.log("=== AI EXPLANATION COMPLETED SUCCESSFULLY ===");
         
     } catch (error) {
