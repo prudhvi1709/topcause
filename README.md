@@ -54,3 +54,6 @@ This project is licensed under the MIT License. See the LICENSE file for details
 ## Acknowledgments
 
 - This application utilizes the TopCause algorithm for analysis.
+
+---
+> **This is Demo. contains no confidential data/IP**
